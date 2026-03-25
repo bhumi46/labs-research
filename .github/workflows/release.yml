@@ -51,16 +51,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Step 1: Build & push Docker image with semantic version tag ──────────
-      - name: Build and push Docker image
+      # ── Step 1: Build & push Docker images (CPU + GPU) ──────────────────────
+      - name: Build and push CPU image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile.serve
           push: true
+          build-args: VARIANT=cpu
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-cpu
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-cpu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push GPU image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          build-args: VARIANT=gpu
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-gpu
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-gpu
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

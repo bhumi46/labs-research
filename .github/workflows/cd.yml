@@ -58,15 +58,29 @@ jobs:
           echo "full=${FULL}" >> "$GITHUB_OUTPUT"
           echo "Image: ${FULL}"
 
-      - name: Build and push Docker image
+      - name: Build and push CPU image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile.serve
           push: true
+          build-args: VARIANT=cpu
           tags: |
-            ${{ steps.image-tag.outputs.full }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.image-tag.outputs.full }}-cpu
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-cpu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push GPU image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          build-args: VARIANT=gpu
+          tags: |
+            ${{ steps.image-tag.outputs.full }}-gpu
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-gpu
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

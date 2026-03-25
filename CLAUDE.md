@@ -78,8 +78,15 @@ ingest → preprocess → build_features → train → evaluate
 
 **CI/CD:**
 - `ci.yml` — lint → test → `dvc repro` on every push. Posts ML metrics as PR comment.
-- `cd.yml` — builds Docker image (sha tag) on every PR → updates staging in GitOps repo. On merge to main → updates production in GitOps repo. PipeCD picks up changes and deploys.
-- `release.yml` — triggered by `git tag vX.Y.Z`. Builds Docker (version tag) + packages Helm chart + pushes both to `ghcr.io` OCI registry + updates GitOps repo production values + creates GitHub Release.
+- `cd.yml` — builds CPU + GPU Docker images (sha tag) on every PR → updates staging in GitOps repo. On merge to main → updates production in GitOps repo. PipeCD picks up changes and deploys.
+- `release.yml` — triggered by `git tag vX.Y.Z`. Builds CPU + GPU Docker images (version tag) + packages Helm chart + pushes all to `ghcr.io` OCI registry + updates GitOps repo production values + creates GitHub Release.
+
+**Docker images (CPU + GPU variants):**
+- CPU: `docker build -t house-price-predictor:cpu .`
+- GPU: `docker build --build-arg VARIANT=gpu -t house-price-predictor:gpu .`
+- GPU base: `nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04`
+- Image tags in registry: `sha-abc123-cpu`, `sha-abc123-gpu`, `1.0.2-cpu`, `1.0.2-gpu`
+- Select variant in GitOps repo values: `image.tag: 1.0.2-gpu`
 
 **Helm Chart:** `charts/house-price-predictor/` — lives in this repo alongside source code (MOSIP pattern).
 - `Chart.yaml` has two version fields: `version` (chart — bump only when templates change) and `appVersion` (app — auto-bumped by `release.yml` on every tag).

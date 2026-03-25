@@ -1,6 +1,24 @@
+# ─── Base selection ───────────────────────────────────────────────────────────
+# Build for CPU (default):  docker build -t house-price-predictor:cpu .
+# Build for GPU:            docker build --build-arg VARIANT=gpu -t house-price-predictor:gpu .
+ARG VARIANT=cpu
+
+# ─── CPU base ─────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS base-cpu
+
+# ─── GPU base ─────────────────────────────────────────────────────────────────
+# CUDA 12.1 + cuDNN 8 runtime on Ubuntu 22.04 (NVIDIA official image)
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04 AS base-gpu
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
 # ─── Stage 1: Builder ─────────────────────────────────────────────────────────
-# Install dependencies in a separate stage to keep the final image small
-FROM python:3.11-slim AS builder
+# Selects base-cpu or base-gpu depending on VARIANT arg
+FROM base-${VARIANT} AS builder
 
 WORKDIR /app
 
@@ -13,8 +31,8 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir --user -e "."
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
-# Lean final image — only what's needed to serve predictions
-FROM python:3.11-slim AS runtime
+# Re-select the same base for the final lean image
+FROM base-${VARIANT} AS runtime
 
 WORKDIR /app
 
