@@ -1,0 +1,76 @@
+# Default values for house-price-predictor.
+# Override per environment in mlops-platform-gitops:
+#   apps/house-price-predictor/values-staging.yaml
+#   apps/house-price-predictor/values-production.yaml
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/YOUR_GITHUB_USERNAME/mlops
+  # tag is overridden by release.yml via GitOps repo (e.g., 1.0.2)
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  host: house-price-predictor.yourdomain.com
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# MLflow tracking server URL (injected as env var into the container)
+mlflow:
+  trackingUri: "http://mlflow.mlops-platform.svc.cluster.local:5000"
+  modelName: "house-price-predictor"
+  modelStage: "Production"
+
+# Liveness / readiness probes
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# Namespace is set per cluster in the GitOps repo PipeCD config
+namespace: mlops-apps
+
+# Stakater Reloader — auto rolling-restart when Vault secret is rotated
+# ESO updates K8s Secret → Reloader detects change → triggers rolling restart
+# Set to "true" to enable, "false" to disable
+reloader:
+  enabled: "true"
+  annotation:
+    key: reloader.stakater.com/auto
+    value: "true"
+
+# External Secrets — pulls secrets from Vault via ESO
+# Zero secrets stored in Git — Vault is the single source of truth
+externalSecret:
+  enabled: true
+  refreshInterval: 1h                          # how often ESO re-fetches from Vault
+  secretStoreName: vault-backend               # ClusterSecretStore name in your platform
+  secretStoreKind: ClusterSecretStore
+  vaultBasePath: secret/mlops/house-price-predictor  # Vault KV path
+  secrets:
+    - secretKey: mlflow-db-password            # key in K8s Secret
+      vaultProperty: mlflow-db-password        # field in Vault path
+    - secretKey: minio-access-key
+      vaultProperty: minio-access-key
+    - secretKey: minio-secret-key
+      vaultProperty: minio-secret-key

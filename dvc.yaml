@@ -1,0 +1,86 @@
+# ============================================================
+# dvc.yaml — Pipeline DAG (Directed Acyclic Graph)
+# ============================================================
+# Run the full pipeline:  dvc repro
+# View the DAG:           dvc dag
+#
+# DVC only re-runs stages whose deps/params have changed.
+# This gives you reproducible, incremental pipelines.
+
+stages:
+
+  # ── Stage 1: Data Ingestion ─────────────────────────────
+  ingest:
+    cmd: python -m src.data.ingest
+    deps:
+      - src/data/ingest.py
+    params:
+      - data.raw_path
+    outs:
+      - data/raw/housing.csv
+
+  # ── Stage 2: Preprocessing ──────────────────────────────
+  preprocess:
+    cmd: python -m src.data.preprocess
+    deps:
+      - src/data/preprocess.py
+      - data/raw/housing.csv
+    params:
+      - data.raw_path
+      - data.train_path
+      - data.test_path
+      - data.test_size
+      - data.random_state
+    outs:
+      - data/processed/train.csv
+      - data/processed/test.csv
+
+  # ── Stage 3: Feature Engineering ────────────────────────
+  build_features:
+    cmd: python -m src.features.build_features
+    deps:
+      - src/features/build_features.py
+      - data/processed/train.csv
+      - data/processed/test.csv
+    params:
+      - data.train_path
+      - data.test_path
+      - data.train_features_path
+      - data.test_features_path
+      - model.scaler_path
+    outs:
+      - data/processed/train_features.csv
+      - data/processed/test_features.csv
+      - models/scaler.pkl
+
+  # ── Stage 4: Model Training ──────────────────────────────
+  train:
+    cmd: python -m src.models.train
+    deps:
+      - src/models/train.py
+      - data/processed/train_features.csv
+    params:
+      - model.type
+      - model.n_estimators
+      - model.max_depth
+      - model.random_state
+      - mlflow.experiment_name
+      - mlflow.model_name
+    metrics:
+      - metrics/train_metrics.json:
+          cache: false
+
+  # ── Stage 5: Model Evaluation ───────────────────────────
+  evaluate:
+    cmd: python -m src.models.evaluate
+    deps:
+      - src/models/evaluate.py
+      - data/processed/test_features.csv
+    params:
+      - mlflow.experiment_name
+      - mlflow.model_name
+      - evaluation.min_r2
+      - evaluation.max_rmse
+    metrics:
+      - metrics/test_metrics.json:
+          cache: false

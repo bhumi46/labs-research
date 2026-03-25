@@ -1,0 +1,30 @@
+# ============================================================
+# params.yaml — Single source of truth for ALL hyperparameters
+# ============================================================
+# DVC tracks changes here. Changing a value and running
+# `dvc repro` will only re-run the affected pipeline stages.
+
+data:
+  raw_path: data/raw/housing.csv
+  train_path: data/processed/train.csv
+  test_path: data/processed/test.csv
+  train_features_path: data/processed/train_features.csv
+  test_features_path: data/processed/test_features.csv
+  test_size: 0.2          # 20% held out for testing
+  random_state: 42        # Reproducibility seed
+
+model:
+  type: random_forest     # Options: random_forest | gradient_boosting
+  n_estimators: 100
+  max_depth: 10
+  random_state: 42
+  scaler_path: models/scaler.pkl
+
+mlflow:
+  experiment_name: house-price-predictor
+  model_name: house-price-model
+  tracking_uri: ""        # Empty = local ./mlruns directory
+
+evaluation:
+  min_r2: 0.5             # Pipeline FAILS if R² drops below this
+  max_rmse: 1.0           # Pipeline FAILS if RMSE exceeds this ($100k units)

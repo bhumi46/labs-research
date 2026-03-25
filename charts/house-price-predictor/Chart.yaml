@@ -1,0 +1,11 @@
+apiVersion: v2
+name: house-price-predictor
+description: ML model serving — House Price Predictor (California Housing dataset)
+type: application
+
+# chart version — bump ONLY when templates/ or values.yaml structure changes
+version: 1.0.0
+
+# app version — bumped automatically by release.yml on every git tag (v1.0.2 → 1.0.2)
+# must match the Docker image tag pushed to ghcr.io
+appVersion: "0.1.0"

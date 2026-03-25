@@ -1,0 +1,145 @@
+name: CD — Build, Push, Deploy
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CD Flow:
+#
+#   PR opened/updated  →  build image  →  update staging tag in GitOps repo
+#                                          ↓
+#                                  PipeCD deploys to Staging K8s (~1 min)
+#
+#   PR merged to main  →  build image  →  update production tag in GitOps repo
+#                                          ↓
+#                                  PipeCD: canary 20% → approval → full rollout
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  GITOPS_REPO: YOUR_GITHUB_USERNAME/mlops-gitops  # ← CHANGE THIS
+
+jobs:
+
+  # ── Job 1: Build & Push Docker Image ────────────────────────────────────────
+  # Runs on every PR push AND on merge to main
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.image-tag.outputs.tag }}
+      image-full: ${{ steps.image-tag.outputs.full }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Image tag: short git SHA (e.g., sha-abc1234)
+      - name: Compute image tag
+        id: image-tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="sha-${SHORT_SHA}"
+          FULL="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${FULL}"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          tags: |
+            ${{ steps.image-tag.outputs.full }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Job 2: Deploy to Staging ─────────────────────────────────────────────────
+  # Triggered on every PR — developers see their model running in staging
+  deploy-staging:
+    name: Deploy to Staging (via GitOps)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'pull_request'
+
+    steps:
+      # Check out the GitOps repo (NOT the model repo)
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_PAT }}  # PAT with write access to GitOps repo
+          path: gitops
+
+      - name: Update staging image tag
+        working-directory: gitops
+        run: |
+          bash scripts/update-image-tag.sh \
+            --app house-price-predictor \
+            --env staging \
+            --tag "${{ needs.build-and-push.outputs.image-tag }}" \
+            --commit-sha "${{ github.sha }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
+
+      # Post the staging URL as a PR comment
+      - name: Comment staging URL on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚀 Deployed to Staging
+
+            **Image:** \`${{ needs.build-and-push.outputs.image-full }}\`
+            **Staging URL:** https://staging.house-price-predictor.yourdomain.com/docs
+
+            PipeCD is deploying now — check status at your PipeCD dashboard.
+
+            > After verifying staging, merge this PR to trigger production deployment.`
+            });
+
+  # ── Job 3: Deploy to Production ──────────────────────────────────────────────
+  # Only triggered when a PR is merged to main
+  # PipeCD will run: canary 20% → WAIT_APPROVAL → full rollout
+  deploy-production:
+    name: Deploy to Production (via GitOps — Canary)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops
+
+      - name: Update production image tag
+        working-directory: gitops
+        run: |
+          bash scripts/update-image-tag.sh \
+            --app house-price-predictor \
+            --env production \
+            --tag "${{ needs.build-and-push.outputs.image-tag }}" \
+            --commit-sha "${{ github.sha }}"
+      # Note: GitHub Release + Helm chart publish is handled by release.yml
+      # release.yml triggers on: git tag vX.Y.Z (semantic version tags only)

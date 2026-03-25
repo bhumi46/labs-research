@@ -1,0 +1,43 @@
+# ─── Stage 1: Builder ─────────────────────────────────────────────────────────
+# Install dependencies in a separate stage to keep the final image small
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+# Install only runtime deps (not dev deps like pytest)
+RUN pip install --no-cache-dir --user -e "."
+
+# ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
+# Lean final image — only what's needed to serve predictions
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Copy installed packages from the builder stage
+COPY --from=builder /root/.local /root/.local
+
+# Copy only the application code needed for serving
+COPY serve/ serve/
+COPY src/ src/
+COPY pyproject.toml .
+
+ENV PATH="/root/.local/bin:$PATH"
+ENV PYTHONPATH="/app"
+
+# These are overridden by docker-compose.yml or Kubernetes env vars
+ENV MLFLOW_TRACKING_URI="http://mlflow:5000"
+ENV MLFLOW_MODEL_NAME="house-price-model"
+ENV MLFLOW_MODEL_STAGE="Production"
+
+EXPOSE 8000
+
+# Kubernetes uses this to decide if the pod is healthy
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["uvicorn", "serve.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

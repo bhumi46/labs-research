@@ -1,0 +1,11 @@
+# DVC ignores these paths when hashing
+.git
+.github
+*.py
+*.md
+*.yaml
+*.toml
+*.txt
+*.sh
+tests/
+notebooks/

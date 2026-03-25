@@ -1,0 +1,37 @@
+# Pre-upgrade hook — runs BEFORE the new version is deployed.
+# Use case: validate the new image is reachable, run DB migrations, etc.
+# If this Job fails, the upgrade is aborted and PipeCD auto-rolls back.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-pre-upgrade
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"          # lower = runs first (if multiple hooks)
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pre-upgrade-check
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - python
+            - -c
+            - |
+              # Validate MLflow is reachable and Production model exists
+              import mlflow, os
+              mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+              client = mlflow.tracking.MlflowClient()
+              versions = client.get_latest_versions(
+                  os.environ["MLFLOW_MODEL_NAME"], stages=["Production"]
+              )
+              assert versions, "No Production model found in MLflow registry — aborting upgrade"
+              print(f"Pre-upgrade check passed: model version {versions[0].version} ready")
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .Values.mlflow.trackingUri | quote }}
+            - name: MLFLOW_MODEL_NAME
+              value: {{ .Values.mlflow.modelName | quote }}

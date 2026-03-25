@@ -1,0 +1,138 @@
+name: Release — Publish Docker + Helm Chart
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Release Flow (MOSIP pattern):
+#
+#   develop  →  release/x.y.z  →  QA sign-off  →  git tag vX.Y.Z  →  push tag
+#                                                           ↓
+#                                               This workflow triggers
+#                                                           ↓
+#                                    1. Build Docker image  (tag: X.Y.Z)
+#                                    2. Push to ghcr.io
+#                                    3. Update appVersion in Chart.yaml
+#                                    4. Package + push Helm chart to OCI (ghcr.io)
+#                                    5. Update GitOps repo → PipeCD deploys to prod
+#                                    6. Create GitHub Release with notes
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    tags:
+      - "v*.*.*"    # trigger: git tag v1.0.2 && git push origin v1.0.2
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  CHART_NAME: house-price-predictor
+  GITOPS_REPO: YOUR_GITHUB_USERNAME/mlops-platform-gitops  # ← CHANGE THIS
+
+jobs:
+  release:
+    name: Build, Package & Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # needed to create GitHub Release
+      packages: write    # needed to push to ghcr.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Extract semantic version from tag: v1.0.2 → 1.0.2
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: ${VERSION}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Step 1: Build & push Docker image with semantic version tag ──────────
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Step 2: Set up Helm ──────────────────────────────────────────────────
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      # ── Step 3: Update appVersion in Chart.yaml to match the release tag ────
+      # Note: chart `version` is NOT changed here — only bump it when
+      # templates/ or values structure changes (separate PR + chart version bump)
+      - name: Update appVersion in Chart.yaml
+        run: |
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" \
+            charts/${{ env.CHART_NAME }}/Chart.yaml
+          echo "Updated Chart.yaml:"
+          cat charts/${{ env.CHART_NAME }}/Chart.yaml
+
+      # ── Step 4: Package and push Helm chart to OCI registry (ghcr.io) ───────
+      - name: Package and push Helm chart to OCI
+        run: |
+          CHART_VERSION=$(grep '^version:' charts/${{ env.CHART_NAME }}/Chart.yaml | awk '{print $2}')
+          echo "Chart version: ${CHART_VERSION}"
+          helm package charts/${{ env.CHART_NAME }} --destination /tmp/charts
+          helm push /tmp/charts/${{ env.CHART_NAME }}-${CHART_VERSION}.tgz \
+            oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
+
+      # ── Step 5: Update GitOps repo → triggers PipeCD production deploy ──────
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops
+
+      - name: Update production values in GitOps repo
+        working-directory: gitops
+        run: |
+          bash scripts/update-image-tag.sh \
+            --app house-price-predictor \
+            --env production \
+            --tag "${{ steps.version.outputs.version }}" \
+            --commit-sha "${{ github.sha }}"
+
+      # ── Step 6: Create GitHub Release ───────────────────────────────────────
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.version.outputs.version }}';
+            const registry = '${{ env.REGISTRY }}';
+            const imageName = '${{ env.IMAGE_NAME }}';
+            const repoOwner = context.repo.owner;
+            const chartName = '${{ env.CHART_NAME }}';
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${version}`,
+              name: `v${version}`,
+              body: [
+                `## house-price-predictor v${version}`,
+                '',
+                '### Artifacts',
+                `| Artifact | Reference |`,
+                `|---|---|`,
+                `| Docker image | \`${registry}/${imageName}:${version}\` |`,
+                `| Helm chart (OCI) | \`oci://${registry}/${repoOwner}/charts/${chartName}\` |`,
+                '',
+                '### Deploy',
+                'Production deployment triggered in PipeCD.',
+                'Pipeline: canary 20% → manual approval → full rollout.',
+              ].join('\n'),
+              draft: false,
+              prerelease: false
+            });
